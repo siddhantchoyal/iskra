@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Calendar, 
   Check, 
@@ -10,7 +10,8 @@ import {
   ImageIcon,
   Mic,
   FileText,
-  Link as LinkIcon
+  Link as LinkIcon,
+  RefreshCw
 } from 'lucide-react';
 import { DayRecord, LeadQuality, ProofItem } from '../types';
 import { renderWithClickableLinks } from '../utils/linkify';
@@ -47,14 +48,70 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
   const [onboardedProofs, setOnboardedProofs] = useState<ProofItem[]>(record.onboardedProofs || []);
   const [onboardedNotes, setOnboardedNotes] = useState<string>(record.onboardedNotes || '');
 
-  const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
+  const [lastSavedTime, setLastSavedTime] = useState<string>('');
+  const isSwitchingDateRef = useRef(true);
+  const prevDateRef = useRef(currentDate);
 
   // Modal open states
   const [isSetterProofModalOpen, setIsSetterProofModalOpen] = useState(false);
   const [isCallerProofModalOpen, setIsCallerProofModalOpen] = useState(false);
 
-  // Sync state when record or date changes
+  // Keep a ref of all fields for instant flushing on unmount or navigation
+  const latestDataRef = useRef({
+    date: currentDate,
+    leadsReceived,
+    quality,
+    receivedNotes,
+    qualifiedLeads,
+    qualifiedProofs,
+    qualifiedNotes,
+    onboardedLeads,
+    onboardedProofs,
+    onboardedNotes,
+  });
+
+  latestDataRef.current = {
+    date: currentDate,
+    leadsReceived,
+    quality,
+    receivedNotes,
+    qualifiedLeads,
+    qualifiedProofs,
+    qualifiedNotes,
+    onboardedLeads,
+    onboardedProofs,
+    onboardedNotes,
+  };
+
+  const flushSave = (overrideDate?: string) => {
+    const d = latestDataRef.current;
+    const targetDate = overrideDate || d.date;
+    const updated: DayRecord = {
+      date: targetDate,
+      leadsReceived: Number(d.leadsReceived) || 0,
+      quality: d.quality,
+      receivedNotes: d.receivedNotes.trim(),
+      qualifiedLeads: Number(d.qualifiedLeads) || 0,
+      qualifiedProofs: d.qualifiedProofs,
+      qualifiedNotes: d.qualifiedNotes.trim(),
+      onboardedLeads: Number(d.onboardedLeads) || 0,
+      onboardedProofs: d.onboardedProofs,
+      onboardedNotes: d.onboardedNotes.trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    onSave(updated);
+  };
+
+  // Sync state when currentDate changes
   useEffect(() => {
+    // If we are navigating away from a previous date, ensure previous date's changes were saved
+    if (prevDateRef.current && prevDateRef.current !== currentDate) {
+      flushSave(prevDateRef.current);
+    }
+    prevDateRef.current = currentDate;
+    isSwitchingDateRef.current = true;
+
     setLeadsReceived(record.leadsReceived || 0);
     setQuality(record.quality || 'Good');
     setReceivedNotes(record.receivedNotes || '');
@@ -67,34 +124,63 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
     setOnboardedProofs(record.onboardedProofs || []);
     setOnboardedNotes(record.onboardedNotes || '');
 
-    setSavedSuccess(false);
-  }, [record, currentDate]);
+    setSaveStatus('saved');
+  }, [currentDate]);
+
+  // Flush on unmount (e.g. if user navigates to Reports Tracker)
+  useEffect(() => {
+    return () => {
+      flushSave();
+    };
+  }, []);
+
+  // Auto-save whenever any input, note, or quality changes (Google Sheets / Notes style)
+  useEffect(() => {
+    if (isSwitchingDateRef.current) {
+      isSwitchingDateRef.current = false;
+      return;
+    }
+
+    setSaveStatus('saving');
+    const timer = setTimeout(() => {
+      const updated: DayRecord = {
+        date: currentDate,
+        leadsReceived: Number(leadsReceived) || 0,
+        quality,
+        receivedNotes: receivedNotes.trim(),
+        qualifiedLeads: Number(qualifiedLeads) || 0,
+        qualifiedProofs,
+        qualifiedNotes: qualifiedNotes.trim(),
+        onboardedLeads: Number(onboardedLeads) || 0,
+        onboardedProofs,
+        onboardedNotes: onboardedNotes.trim(),
+        updatedAt: new Date().toISOString(),
+      };
+      onSave(updated);
+      setSaveStatus('saved');
+      setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [
+    leadsReceived,
+    quality,
+    receivedNotes,
+    qualifiedLeads,
+    qualifiedProofs,
+    qualifiedNotes,
+    onboardedLeads,
+    onboardedProofs,
+    onboardedNotes,
+    currentDate,
+  ]);
 
   // Quick next/prev day navigation
   const shiftDate = (days: number) => {
+    flushSave();
     const d = new Date(currentDate);
     d.setDate(d.getDate() + days);
     onDateChange(d.toISOString().split('T')[0]);
-  };
-
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    const updated: DayRecord = {
-      date: currentDate,
-      leadsReceived: Number(leadsReceived) || 0,
-      quality,
-      receivedNotes: receivedNotes.trim(),
-      qualifiedLeads: Number(qualifiedLeads) || 0,
-      qualifiedProofs,
-      qualifiedNotes: qualifiedNotes.trim(),
-      onboardedLeads: Number(onboardedLeads) || 0,
-      onboardedProofs,
-      onboardedNotes: onboardedNotes.trim(),
-      updatedAt: new Date().toISOString(),
-    };
-    onSave(updated);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
   };
 
   // Funnel calculations in real-time
@@ -180,7 +266,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
             <Calendar className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base sm:text-lg font-bold">
                 {isToday ? "Today's Daily Entry" : "Daily Entry"}
               </h2>
@@ -189,9 +275,21 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
                   Today
                 </span>
               )}
+              {/* Google Sheets / Notes auto-save status badge */}
+              {saveStatus === 'saving' ? (
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>Saving...</span>
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                  <Check className="w-3 h-3" />
+                  <span>All changes saved{lastSavedTime ? ` (${lastSavedTime})` : ''}</span>
+                </span>
+              )}
             </div>
             <p className={`text-xs ${textMuted}`}>
-              Simple 3-stage funnel &bull; Links inside notes are automatically clickable
+              Simple 3-stage funnel &bull; All entries automatically saved &amp; updated
             </p>
           </div>
         </div>
@@ -269,7 +367,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
       </div>
 
       {/* Main Form */}
-      <form onSubmit={handleSave} className="space-y-6">
+      <form onSubmit={(e) => { e.preventDefault(); flushSave(); }} className="space-y-6">
 
         {/* STAGE 1: LEADS RECEIVED (QUALITY, NOTES) */}
         <div className={`rounded-xl border shadow-xs p-5 space-y-4 ${cardBg}`}>
@@ -505,30 +603,31 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
           </div>
         </div>
 
-        {/* Action Save Bar */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+        {/* Action / Auto-Save Status Bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 pb-6">
           <button
             type="button"
-            onClick={onGoToTracker}
-            className={`text-xs font-semibold hover:underline transition ${textMuted}`}
+            onClick={() => {
+              flushSave();
+              onGoToTracker();
+            }}
+            className={`text-xs font-semibold hover:underline transition ${textMuted} flex items-center gap-1.5`}
           >
             &larr; View Report &amp; History Tracker
           </button>
 
-          <div className="flex items-center gap-3">
-            {savedSuccess && (
-              <span className="text-xs font-bold text-emerald-400 flex items-center gap-1 animate-pulse">
-                <Check className="w-4 h-4" /> Saved Successfully!
+          <div className="flex items-center gap-2">
+            {saveStatus === 'saving' ? (
+              <span className="text-xs font-semibold text-amber-400 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>Saving changes...</span>
+              </span>
+            ) : (
+              <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                <Check className="w-3.5 h-3.5" />
+                <span>All info automatically saved &amp; updated</span>
               </span>
             )}
-            <button
-              type="submit"
-              id="save-day-btn"
-              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 active:scale-95 cursor-pointer"
-            >
-              <Check className="w-4 h-4" />
-              <span>Save Day's Info</span>
-            </button>
           </div>
         </div>
 
@@ -541,7 +640,26 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
         title="Setter Proof of Follow-up"
         stageName="Qualified Leads Stage"
         proofs={qualifiedProofs}
-        onSaveProofs={(updated) => setQualifiedProofs(updated)}
+        onSaveProofs={(updatedProofs) => {
+          setQualifiedProofs(updatedProofs);
+          // Auto-save immediately to storage
+          const d = latestDataRef.current;
+          onSave({
+            date: currentDate,
+            leadsReceived: Number(d.leadsReceived) || 0,
+            quality: d.quality,
+            receivedNotes: d.receivedNotes.trim(),
+            qualifiedLeads: Number(d.qualifiedLeads) || 0,
+            qualifiedProofs: updatedProofs,
+            qualifiedNotes: d.qualifiedNotes.trim(),
+            onboardedLeads: Number(d.onboardedLeads) || 0,
+            onboardedProofs: d.onboardedProofs,
+            onboardedNotes: d.onboardedNotes.trim(),
+            updatedAt: new Date().toISOString(),
+          });
+          setSaveStatus('saved');
+          setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        }}
         isDark={isDark}
       />
 
@@ -552,7 +670,26 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
         title="Caller Proof of Follow-up &amp; Closing"
         stageName="Onboarded Leads Stage"
         proofs={onboardedProofs}
-        onSaveProofs={(updated) => setOnboardedProofs(updated)}
+        onSaveProofs={(updatedProofs) => {
+          setOnboardedProofs(updatedProofs);
+          // Auto-save immediately to storage
+          const d = latestDataRef.current;
+          onSave({
+            date: currentDate,
+            leadsReceived: Number(d.leadsReceived) || 0,
+            quality: d.quality,
+            receivedNotes: d.receivedNotes.trim(),
+            qualifiedLeads: Number(d.qualifiedLeads) || 0,
+            qualifiedProofs: d.qualifiedProofs,
+            qualifiedNotes: d.qualifiedNotes.trim(),
+            onboardedLeads: Number(d.onboardedLeads) || 0,
+            onboardedProofs: updatedProofs,
+            onboardedNotes: d.onboardedNotes.trim(),
+            updatedAt: new Date().toISOString(),
+          });
+          setSaveStatus('saved');
+          setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        }}
         isDark={isDark}
       />
 

@@ -2,6 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Guard window.fetch to provide a setter and prevent "Cannot set property fetch of #<Window> which has only a getter"
+      (function () {
+        try {
+          var currentFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : undefined;
+          var fetchDescriptor = {
+            get: function () {
+              return currentFetch;
+            },
+            set: function (val) {
+              currentFetch = val;
+            },
+            configurable: true,
+            enumerable: true
+          };
+
+          if (typeof Window !== 'undefined' && Window.prototype) {
+            try {
+              Object.defineProperty(Window.prototype, 'fetch', fetchDescriptor);
+            } catch (_) {}
+          }
+          try {
+            Object.defineProperty(window, 'fetch', fetchDescriptor);
+          } catch (_) {}
+        } catch (_) {}
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daily Lead & Pipeline Tracker</title>
     <meta name="description" content="Daily lead conversion and pipeline performance tracker for setters, callers, and controllers with proof screenshots, quality ratings, and reports." />

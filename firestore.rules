@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net: default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Health & connection testing path
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    function isValidDateId(id) {
+      return id is string && id.size() == 10 && id.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidDayRecord(data) {
+      return data.keys().hasAll(['date', 'leadsReceived', 'quality', 'qualifiedLeads', 'onboardedLeads']) &&
+        data.date is string &&
+        data.date.size() == 10 &&
+        data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.leadsReceived is number &&
+        data.leadsReceived >= 0 &&
+        data.quality in ['Poor', 'Fair', 'Good', 'Excellent'] &&
+        (!('receivedNotes' in data) || (data.receivedNotes is string && data.receivedNotes.size() <= 10000)) &&
+        data.qualifiedLeads is number &&
+        data.qualifiedLeads >= 0 &&
+        (!('qualifiedProofs' in data) || (data.qualifiedProofs is list && data.qualifiedProofs.size() <= 50)) &&
+        (!('qualifiedNotes' in data) || (data.qualifiedNotes is string && data.qualifiedNotes.size() <= 10000)) &&
+        data.onboardedLeads is number &&
+        data.onboardedLeads >= 0 &&
+        (!('onboardedProofs' in data) || (data.onboardedProofs is list && data.onboardedProofs.size() <= 50)) &&
+        (!('onboardedNotes' in data) || (data.onboardedNotes is string && data.onboardedNotes.size() <= 10000)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 50));
+    }
+
+    // 3. Daily funnel records
+    match /day_records/{date} {
+      allow read: if true;
+      allow create: if isValidDateId(date) && incoming().date == date && isValidDayRecord(incoming());
+      allow update: if isValidDateId(date) && incoming().date == date && isValidDayRecord(incoming());
+      allow delete: if isValidDateId(date);
+    }
+  }
+}

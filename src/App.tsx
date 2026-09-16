@@ -2,8 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { DailyEntryPage } from './components/DailyEntryPage';
 import { ReportsTrackerPage } from './components/ReportsTrackerPage';
 import { DayRecord } from './types';
-import { loadRecords, saveRecords } from './utils/storage';
-import { PenTool, BarChart3, Sun, Moon } from 'lucide-react';
+import {
+  loadCachedRecords,
+  saveCachedRecords,
+  saveRecordToCloud,
+  deleteRecordFromCloud,
+  subscribeToCloudRecords,
+} from './utils/storage';
+import { PenTool, BarChart3, Sun, Moon, Cloud, CloudOff } from 'lucide-react';
 
 export default function App() {
   const getTodayISO = () => new Date().toISOString().split('T')[0];
@@ -14,9 +20,10 @@ export default function App() {
     return (saved as 'dark' | 'light') || 'dark';
   });
 
-  const [records, setRecords] = useState<DayRecord[]>([]);
+  const [records, setRecords] = useState<DayRecord[]>(() => loadCachedRecords());
   const [activeView, setActiveView] = useState<'entry' | 'tracker'>('entry');
   const [selectedDate, setSelectedDate] = useState<string>(getTodayISO());
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('syncing');
 
   // Apply theme to document & localStorage
   useEffect(() => {
@@ -33,10 +40,22 @@ export default function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Load records from storage on initial mount
+  // Real-time Cloud Sync Subscription with Firestore
   useEffect(() => {
-    const loaded = loadRecords();
-    setRecords(loaded);
+    setSyncStatus('syncing');
+    const unsubscribe = subscribeToCloudRecords(
+      (cloudRecords) => {
+        setRecords(cloudRecords);
+        setSyncStatus('synced');
+      },
+      (status) => {
+        setSyncStatus(status);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // Find record for selected date, or default empty record
@@ -53,8 +72,9 @@ export default function App() {
     onboardedNotes: '',
   };
 
-  // Save or update record
-  const handleSaveRecord = (updated: DayRecord) => {
+  // Save or update record (instant optimistic update + cloud Firestore persistence)
+  const handleSaveRecord = async (updated: DayRecord) => {
+    // 1. Optimistic local state update
     setRecords((prev) => {
       const idx = prev.findIndex((r) => r.date === updated.date);
       let list: DayRecord[];
@@ -64,21 +84,38 @@ export default function App() {
       } else {
         list = [updated, ...prev];
       }
-      // Sort newest first
       list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      saveRecords(list);
+      saveCachedRecords(list);
       return list;
     });
+
+    // 2. Persist to Cloud Database (Firestore)
+    try {
+      setSyncStatus('syncing');
+      await saveRecordToCloud(updated);
+      setSyncStatus('synced');
+    } catch (err) {
+      console.error('Cloud save failed, local cache preserved:', err);
+      setSyncStatus('error');
+    }
   };
 
-  // Delete record
-  const handleDeleteRecord = (date: string) => {
+  // Delete record (from both local cache and cloud)
+  const handleDeleteRecord = async (date: string) => {
     if (window.confirm(`Delete data for ${date}?`)) {
       setRecords((prev) => {
         const list = prev.filter((r) => r.date !== date);
-        saveRecords(list);
+        saveCachedRecords(list);
         return list;
       });
+
+      try {
+        setSyncStatus('syncing');
+        await deleteRecordFromCloud(date);
+        setSyncStatus('synced');
+      } catch (err) {
+        console.error('Cloud delete error:', err);
+      }
     }
   };
 
@@ -113,9 +150,39 @@ export default function App() {
               L
             </div>
             <div>
-              <h1 className="text-sm sm:text-base font-bold tracking-tight">
-                Daily Lead Tracker
-              </h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm sm:text-base font-bold tracking-tight">
+                  Daily Lead Tracker
+                </h1>
+                {/* Cloud Sync Status Indicator */}
+                {syncStatus === 'synced' && (
+                  <span
+                    title="All records safely stored and synchronized with Firestore cloud database"
+                    className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                  >
+                    <Cloud className="w-3 h-3 text-emerald-400" />
+                    <span>Cloud Safe</span>
+                  </span>
+                )}
+                {syncStatus === 'syncing' && (
+                  <span
+                    title="Syncing changes with cloud..."
+                    className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                  >
+                    <Cloud className="w-3 h-3 text-amber-400 animate-pulse" />
+                    <span>Syncing...</span>
+                  </span>
+                )}
+                {syncStatus === 'error' && (
+                  <span
+                    title="Operating in offline mode. Local copy preserved."
+                    className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700"
+                  >
+                    <CloudOff className="w-3 h-3 text-slate-400" />
+                    <span>Offline Cache</span>
+                  </span>
+                )}
+              </div>
               <p className="text-[11px] text-slate-400 hidden sm:block">
                 Received &rarr; Qualified &rarr; Onboarded
               </p>

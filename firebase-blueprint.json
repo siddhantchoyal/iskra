@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "DayRecord": {
+      "title": "DayRecord",
+      "description": "Daily funnel tracking record for leads received, qualified leads, and onboarded leads with follow-up proofs.",
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "description": "Date string in YYYY-MM-DD format",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "leadsReceived": {
+          "type": "number",
+          "description": "Total inbound leads received"
+        },
+        "quality": {
+          "type": "string",
+          "description": "Subjective lead quality rating",
+          "enum": ["Poor", "Fair", "Good", "Excellent"]
+        },
+        "receivedNotes": {
+          "type": "string",
+          "description": "Notes and CRM links for received leads",
+          "maxLength": 5000
+        },
+        "qualifiedLeads": {
+          "type": "number",
+          "description": "Count of leads qualified by setter"
+        },
+        "qualifiedProofs": {
+          "type": "array",
+          "description": "List of attached setter follow-up proof items (links, photos, audio, notes)"
+        },
+        "qualifiedNotes": {
+          "type": "string",
+          "description": "Setter qualification notes and context",
+          "maxLength": 5000
+        },
+        "onboardedLeads": {
+          "type": "number",
+          "description": "Count of leads onboarded/closed by caller"
+        },
+        "onboardedProofs": {
+          "type": "array",
+          "description": "List of attached caller closing proof items (links, photos, audio, notes)"
+        },
+        "onboardedNotes": {
+          "type": "string",
+          "description": "Caller onboarding notes and context",
+          "maxLength": 5000
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["date", "leadsReceived", "quality", "qualifiedLeads", "onboardedLeads"]
+    }
+  },
+  "firestore": {
+    "/day_records/{date}": {
+      "schema": "DayRecord",
+      "description": "Collection of daily lead and conversion pipeline records indexed by date"
+    }
+  }
+}

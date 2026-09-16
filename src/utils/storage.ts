@@ -1,6 +1,17 @@
 import { DayRecord, ProofItem } from '../types';
+import { db } from '../firebase';
+import {
+  collection,
+  doc,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+  getDocs,
+  writeBatch
+} from 'firebase/firestore';
 
 const STORAGE_KEY = 'simple_leads_tracker_records_v3';
+const COLLECTION_NAME = 'day_records';
 
 export function getInitialRecords(): DayRecord[] {
   const today = new Date();
@@ -73,50 +84,50 @@ export function getInitialRecords(): DayRecord[] {
         {
           id: 'p-6',
           type: 'note',
-          title: 'Onboarding Call Notes',
-          content: 'All 6 clients have kick-off calls booked for this Thursday. Contracts countersigned.'
+          title: 'Closing Objections Overcome',
+          content: 'Handled implementation timeline concerns by offering expedited 7-day onboarding.'
         }
       ],
-      onboardedNotes: 'Record day! 6 signed agreements and initial deposit received.',
+      onboardedNotes: 'Caller closed 6 out of 15. Stellar conversion rate of 40%.',
     },
     {
       date: formatDate(2),
       leadsReceived: 18,
-      quality: 'Poor',
-      receivedNotes: 'Ad network glitch sent incorrect audience. Review adset here: https://adsmanager.facebook.com',
-      qualifiedLeads: 4,
+      quality: 'Fair',
+      receivedNotes: 'Weekend drop-off in lead volume. Inbound leads from LinkedIn organic posts.',
+      qualifiedLeads: 7,
       qualifiedProofs: [
         {
           id: 'p-7',
-          type: 'note',
-          title: 'Audience Mismatch Summary',
-          content: '10 leads were job seekers applying for hiring posts. Flagged to media buyer.'
+          type: 'link',
+          title: 'Call Recordings Folder',
+          content: 'https://app.gong.io/recordings/setter-discovery-calls',
+          notes: '7 discovery call recordings analyzed with setter.'
         }
       ],
-      qualifiedNotes: 'Setter reached out to all 18, but 10 were seeking jobs not service. Low intent.',
-      onboardedLeads: 1,
+      qualifiedNotes: 'Setter qualified 7 high intent founders.',
+      onboardedLeads: 2,
       onboardedProofs: [
         {
           id: 'p-8',
-          type: 'link',
-          title: 'Call Recording - Closed Client',
-          content: 'https://fathom.video/share/sample-onboarding-call-closed',
-          notes: 'Only qualified lead that showed up closed immediately.'
+          type: 'note',
+          title: 'Follow-up Scheduled',
+          content: '3 leads delayed decision to Monday morning budget meeting.'
         }
       ],
-      onboardedNotes: 'Caller did 3 calls, 1 closed. Media buyer notified to pause adset.',
+      onboardedNotes: 'Caller closed 2. Good momentum going into the new week.',
     },
     {
       date: formatDate(1),
       leadsReceived: 28,
       quality: 'Good',
-      receivedNotes: 'Audience fixed. Leads responsive. Sheet updated: https://crm.example.com/leads',
+      receivedNotes: 'Monday inbound surge from Google Ads & Referral program.',
       qualifiedLeads: 12,
       qualifiedProofs: [
         {
           id: 'p-9',
           type: 'link',
-          title: 'Follow-up Chat Logs',
+          title: 'Setter Conversation Screenshots',
           content: 'https://drive.google.com/file/d/setter-followup-screenshots',
           notes: 'Drive folder containing screenshots of WhatsApp conversations.'
         }
@@ -137,27 +148,43 @@ export function getInitialRecords(): DayRecord[] {
   ];
 }
 
-function normalizeRecord(r: any): DayRecord {
+export function normalizeRecord(r: any): DayRecord {
   const qualifiedProofs: ProofItem[] = Array.isArray(r.qualifiedProofs)
-    ? r.qualifiedProofs
+    ? r.qualifiedProofs.map((p: any) => ({
+        id: String(p.id || 'p-' + Math.random().toString(36).substring(2, 8)),
+        type: p.type || 'link',
+        title: p.title || '',
+        content: p.content || '',
+        notes: p.notes || '',
+        fileName: p.fileName || '',
+        createdAt: p.createdAt || '',
+      }))
     : (r.qualifiedProof ? [{
-        id: 'legacy-qual-' + Math.random().toString(36).substr(2, 6),
+        id: 'legacy-qual-' + Math.random().toString(36).substring(2, 6),
         type: r.qualifiedProof.startsWith('data:image') ? 'photo' : 'link',
         content: r.qualifiedProof,
         title: 'Attached Proof'
       }] : []);
 
   const onboardedProofs: ProofItem[] = Array.isArray(r.onboardedProofs)
-    ? r.onboardedProofs
+    ? r.onboardedProofs.map((p: any) => ({
+        id: String(p.id || 'p-' + Math.random().toString(36).substring(2, 8)),
+        type: p.type || 'link',
+        title: p.title || '',
+        content: p.content || '',
+        notes: p.notes || '',
+        fileName: p.fileName || '',
+        createdAt: p.createdAt || '',
+      }))
     : (r.onboardedProof ? [{
-        id: 'legacy-onb-' + Math.random().toString(36).substr(2, 6),
+        id: 'legacy-onb-' + Math.random().toString(36).substring(2, 6),
         type: r.onboardedProof.startsWith('data:image') ? 'photo' : 'link',
         content: r.onboardedProof,
         title: 'Attached Proof'
       }] : []);
 
   return {
-    date: r.date,
+    date: String(r.date || ''),
     leadsReceived: Number(r.leadsReceived) || 0,
     quality: r.quality || 'Good',
     receivedNotes: r.receivedNotes || '',
@@ -171,20 +198,51 @@ function normalizeRecord(r: any): DayRecord {
   };
 }
 
-export function loadRecords(): DayRecord[] {
+export function sanitizeForCloud(r: DayRecord) {
+  const qProofs = Array.isArray(r.qualifiedProofs)
+    ? r.qualifiedProofs.slice(0, 50).map((p) => ({
+        id: String(p.id || 'p-' + Math.random().toString(36).substring(2, 8)),
+        type: p.type || 'link',
+        title: (p.title || '').slice(0, 200),
+        content: String(p.content || ''),
+        notes: (p.notes || '').slice(0, 2000),
+        fileName: (p.fileName || '').slice(0, 200),
+        createdAt: p.createdAt || new Date().toISOString(),
+      }))
+    : [];
+
+  const oProofs = Array.isArray(r.onboardedProofs)
+    ? r.onboardedProofs.slice(0, 50).map((p) => ({
+        id: String(p.id || 'p-' + Math.random().toString(36).substring(2, 8)),
+        type: p.type || 'link',
+        title: (p.title || '').slice(0, 200),
+        content: String(p.content || ''),
+        notes: (p.notes || '').slice(0, 2000),
+        fileName: (p.fileName || '').slice(0, 200),
+        createdAt: p.createdAt || new Date().toISOString(),
+      }))
+    : [];
+
+  return {
+    date: r.date,
+    leadsReceived: Number(r.leadsReceived) || 0,
+    quality: r.quality || 'Good',
+    receivedNotes: (r.receivedNotes || '').slice(0, 10000),
+    qualifiedLeads: Number(r.qualifiedLeads) || 0,
+    qualifiedProofs: qProofs,
+    qualifiedNotes: (r.qualifiedNotes || '').slice(0, 10000),
+    onboardedLeads: Number(r.onboardedLeads) || 0,
+    onboardedProofs: oProofs,
+    onboardedNotes: (r.onboardedNotes || '').slice(0, 10000),
+    updatedAt: r.updatedAt || new Date().toISOString(),
+  };
+}
+
+// Local cache methods
+export function loadCachedRecords(): DayRecord[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      // Check if previous version records exist
-      const prev = localStorage.getItem('simple_leads_tracker_records_v2');
-      if (prev) {
-        const parsed = JSON.parse(prev);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const normalized = parsed.map(normalizeRecord);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
-          return normalized;
-        }
-      }
       const init = getInitialRecords();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(init));
       return init;
@@ -201,10 +259,96 @@ export function loadRecords(): DayRecord[] {
   }
 }
 
-export function saveRecords(records: DayRecord[]): void {
+export function saveCachedRecords(records: DayRecord[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
   } catch (err) {
-    console.error('Failed to save records', err);
+    console.error('Failed to save cached records', err);
   }
+}
+
+// Backward compatibility alias
+export const loadRecords = loadCachedRecords;
+export const saveRecords = saveCachedRecords;
+
+// Cloud Sync Methods (Firestore)
+export async function saveRecordToCloud(record: DayRecord): Promise<void> {
+  try {
+    const sanitized = sanitizeForCloud(record);
+    const docRef = doc(db, COLLECTION_NAME, record.date);
+    await setDoc(docRef, sanitized, { merge: true });
+  } catch (err) {
+    console.error('Failed to save record to cloud database:', err);
+    throw err;
+  }
+}
+
+export async function deleteRecordFromCloud(date: string): Promise<void> {
+  try {
+    const docRef = doc(db, COLLECTION_NAME, date);
+    await deleteDoc(docRef);
+  } catch (err) {
+    console.error('Failed to delete record from cloud database:', err);
+    throw err;
+  }
+}
+
+/**
+ * Real-time subscription to cloud records with automatic seeding if cloud collection is empty
+ */
+export function subscribeToCloudRecords(
+  onData: (records: DayRecord[]) => void,
+  onSyncStateChange?: (state: 'synced' | 'syncing' | 'error') => void
+): () => void {
+  const colRef = collection(db, COLLECTION_NAME);
+
+  // Set up real-time onSnapshot listener
+  const unsubscribe = onSnapshot(
+    colRef,
+    async (snapshot) => {
+      if (snapshot.empty) {
+        // If the cloud collection is currently empty, seed from local cached records or defaults
+        try {
+          if (onSyncStateChange) onSyncStateChange('syncing');
+          const localRecords = loadCachedRecords();
+          const recordsToSeed = localRecords.length > 0 ? localRecords : getInitialRecords();
+          const batch = writeBatch(db);
+          recordsToSeed.forEach((rec) => {
+            const docRef = doc(db, COLLECTION_NAME, rec.date);
+            batch.set(docRef, sanitizeForCloud(rec));
+          });
+          await batch.commit();
+          // onSnapshot will immediately trigger again with seeded docs
+          if (onSyncStateChange) onSyncStateChange('synced');
+        } catch (seedErr) {
+          console.error('Error seeding initial data to cloud:', seedErr);
+          if (onSyncStateChange) onSyncStateChange('error');
+        }
+        return;
+      }
+
+      const cloudRecords: DayRecord[] = [];
+      snapshot.forEach((d) => {
+        cloudRecords.push(normalizeRecord(d.data()));
+      });
+
+      // Sort newest date first
+      cloudRecords.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      // Mirror to local storage so offline access is always preserved
+      saveCachedRecords(cloudRecords);
+
+      onData(cloudRecords);
+      if (onSyncStateChange) onSyncStateChange('synced');
+    },
+    (err) => {
+      console.error('Firestore listener error:', err);
+      if (onSyncStateChange) onSyncStateChange('error');
+      // Fallback to local cached data
+      const cached = loadCachedRecords();
+      onData(cached);
+    }
+  );
+
+  return unsubscribe;
 }
