@@ -167,6 +167,19 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
       setOnboardedProofs(record.onboardedProofs || []);
       setOnboardedNotes(record.onboardedNotes || '');
 
+      latestDataRef.current = {
+        date: currentDate,
+        leadsReceived: record.leadsReceived || 0,
+        quality: record.quality || 'Good',
+        receivedNotes: record.receivedNotes || '',
+        qualifiedLeads: record.qualifiedLeads || 0,
+        qualifiedProofs: record.qualifiedProofs || [],
+        qualifiedNotes: record.qualifiedNotes || '',
+        onboardedLeads: record.onboardedLeads || 0,
+        onboardedProofs: record.onboardedProofs || [],
+        onboardedNotes: record.onboardedNotes || '',
+      };
+
       setSaveStatus('saved');
     }
   }, [currentDate, record]);

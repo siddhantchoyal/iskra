@@ -22,26 +22,11 @@ export default function App() {
   const [records, setRecords] = useState<DayRecord[]>(() => loadCachedRecords());
   const [activeView, setActiveView] = useState<'entry' | 'tracker'>('entry');
 
-  // Determine initial date: if today has data, use today; otherwise use the latest date that has data
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const cached = loadCachedRecords();
-    const today = getLocalTodayISO();
-    if (cached.some((r) => r.date === today && (r.leadsReceived > 0 || r.qualifiedLeads > 0 || r.onboardedLeads > 0))) {
-      return today;
-    }
-    const active = cached.find(
-      (r) =>
-        r.leadsReceived > 0 ||
-        r.qualifiedLeads > 0 ||
-        r.onboardedLeads > 0 ||
-        (r.qualifiedProofs && r.qualifiedProofs.length > 0) ||
-        (r.onboardedProofs && r.onboardedProofs.length > 0)
-    );
-    return active ? active.date : today;
-  });
+  // The default day is ALWAYS today (local device date), with live updated cloud data
+  const [selectedDate, setSelectedDate] = useState<string>(() => getLocalTodayISO());
 
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('syncing');
-  const userHasPickedDateRef = useRef<boolean>(false);
+  const [isInitialCloudLoaded, setIsInitialCloudLoaded] = useState<boolean>(false);
 
   // Apply theme to document & localStorage
   useEffect(() => {
@@ -65,31 +50,13 @@ export default function App() {
       (cloudRecords) => {
         setRecords(cloudRecords);
         setSyncStatus('synced');
-
-        // On initial load or refresh, if user hasn't manually navigated dates,
-        // show the most recent day with data so they see their actual records immediately
-        if (!userHasPickedDateRef.current && cloudRecords.length > 0) {
-          const today = getLocalTodayISO();
-          const todayHasData = cloudRecords.some(
-            (r) => r.date === today && (r.leadsReceived > 0 || r.qualifiedLeads > 0 || r.onboardedLeads > 0)
-          );
-          if (!todayHasData) {
-            const active = cloudRecords.find(
-              (r) =>
-                r.leadsReceived > 0 ||
-                r.qualifiedLeads > 0 ||
-                r.onboardedLeads > 0 ||
-                (r.qualifiedProofs && r.qualifiedProofs.length > 0) ||
-                (r.onboardedProofs && r.onboardedProofs.length > 0)
-            );
-            if (active) {
-              setSelectedDate(active.date);
-            }
-          }
-        }
+        setIsInitialCloudLoaded(true);
       },
       (status) => {
         setSyncStatus(status);
+        if (status === 'error') {
+          setIsInitialCloudLoaded(true);
+        }
       }
     );
 
@@ -161,18 +128,15 @@ export default function App() {
 
   // Date selection handlers
   const handleDateChange = (date: string) => {
-    userHasPickedDateRef.current = true;
     setSelectedDate(date);
   };
 
   const handleSelectDateToEdit = (date: string) => {
-    userHasPickedDateRef.current = true;
     setSelectedDate(date);
     setActiveView('entry');
   };
 
   const handleNewDay = () => {
-    userHasPickedDateRef.current = true;
     setSelectedDate(getLocalTodayISO());
     setActiveView('entry');
   };
@@ -300,14 +264,25 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 py-6">
         {activeView === 'entry' ? (
-          <DailyEntryPage
-            currentDate={selectedDate}
-            onDateChange={handleDateChange}
-            record={currentRecord}
-            onSave={handleSaveRecord}
-            onGoToTracker={() => setActiveView('tracker')}
-            isDark={isDark}
-          />
+          !isInitialCloudLoaded && !records.some((r) => r.date === selectedDate) ? (
+            <div className={`p-12 text-center rounded-2xl border shadow-xs ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+              <p className={`text-sm font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                Loading Today&apos;s Live Data ({selectedDate})...
+              </p>
+              <p className="text-xs text-slate-500 mt-1">Retrieving latest team data from cloud</p>
+            </div>
+          ) : (
+            <DailyEntryPage
+              key={selectedDate}
+              currentDate={selectedDate}
+              onDateChange={handleDateChange}
+              record={currentRecord}
+              onSave={handleSaveRecord}
+              onGoToTracker={() => setActiveView('tracker')}
+              isDark={isDark}
+            />
+          )
         ) : (
           <ReportsTrackerPage
             records={records}
