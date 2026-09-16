@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DailyEntryPage } from './components/DailyEntryPage';
 import { ReportsTrackerPage } from './components/ReportsTrackerPage';
 import { DayRecord } from './types';
@@ -8,13 +8,12 @@ import {
   saveRecordToCloud,
   deleteRecordFromCloud,
   subscribeToCloudRecords,
+  getLocalTodayISO,
 } from './utils/storage';
 import { PenTool, BarChart3, Sun, Moon, Cloud, CloudOff } from 'lucide-react';
 
 export default function App() {
-  const getTodayISO = () => new Date().toISOString().split('T')[0];
-
-  // Theme state: DARK MODE BY DEFAULT as requested
+  // Theme state: DARK MODE BY DEFAULT
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     const saved = localStorage.getItem('simple_leads_theme');
     return (saved as 'dark' | 'light') || 'dark';
@@ -22,8 +21,27 @@ export default function App() {
 
   const [records, setRecords] = useState<DayRecord[]>(() => loadCachedRecords());
   const [activeView, setActiveView] = useState<'entry' | 'tracker'>('entry');
-  const [selectedDate, setSelectedDate] = useState<string>(getTodayISO());
+
+  // Determine initial date: if today has data, use today; otherwise use the latest date that has data
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const cached = loadCachedRecords();
+    const today = getLocalTodayISO();
+    if (cached.some((r) => r.date === today && (r.leadsReceived > 0 || r.qualifiedLeads > 0 || r.onboardedLeads > 0))) {
+      return today;
+    }
+    const active = cached.find(
+      (r) =>
+        r.leadsReceived > 0 ||
+        r.qualifiedLeads > 0 ||
+        r.onboardedLeads > 0 ||
+        (r.qualifiedProofs && r.qualifiedProofs.length > 0) ||
+        (r.onboardedProofs && r.onboardedProofs.length > 0)
+    );
+    return active ? active.date : today;
+  });
+
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('syncing');
+  const userHasPickedDateRef = useRef<boolean>(false);
 
   // Apply theme to document & localStorage
   useEffect(() => {
@@ -40,13 +58,35 @@ export default function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Real-time Cloud Sync Subscription with Firestore
+  // Real-time Cloud Sync Subscription (Live shared like Google Sheets)
   useEffect(() => {
     setSyncStatus('syncing');
     const unsubscribe = subscribeToCloudRecords(
       (cloudRecords) => {
         setRecords(cloudRecords);
         setSyncStatus('synced');
+
+        // On initial load or refresh, if user hasn't manually navigated dates,
+        // show the most recent day with data so they see their actual records immediately
+        if (!userHasPickedDateRef.current && cloudRecords.length > 0) {
+          const today = getLocalTodayISO();
+          const todayHasData = cloudRecords.some(
+            (r) => r.date === today && (r.leadsReceived > 0 || r.qualifiedLeads > 0 || r.onboardedLeads > 0)
+          );
+          if (!todayHasData) {
+            const active = cloudRecords.find(
+              (r) =>
+                r.leadsReceived > 0 ||
+                r.qualifiedLeads > 0 ||
+                r.onboardedLeads > 0 ||
+                (r.qualifiedProofs && r.qualifiedProofs.length > 0) ||
+                (r.onboardedProofs && r.onboardedProofs.length > 0)
+            );
+            if (active) {
+              setSelectedDate(active.date);
+            }
+          }
+        }
       },
       (status) => {
         setSyncStatus(status);
@@ -119,15 +159,21 @@ export default function App() {
     }
   };
 
-  // Edit specific date from tracker
+  // Date selection handlers
+  const handleDateChange = (date: string) => {
+    userHasPickedDateRef.current = true;
+    setSelectedDate(date);
+  };
+
   const handleSelectDateToEdit = (date: string) => {
+    userHasPickedDateRef.current = true;
     setSelectedDate(date);
     setActiveView('entry');
   };
 
-  // Jump to new day (today)
   const handleNewDay = () => {
-    setSelectedDate(getTodayISO());
+    userHasPickedDateRef.current = true;
+    setSelectedDate(getLocalTodayISO());
     setActiveView('entry');
   };
 
@@ -138,13 +184,13 @@ export default function App() {
       isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-800'
     }`}>
       
-      {/* Super Simple Navigation Header */}
+      {/* Super Simple Google-Sheets-style Header */}
       <header className={`sticky top-0 z-30 shadow-xs border-b transition-colors ${
         isDark ? 'bg-slate-900/95 border-slate-800 text-white' : 'bg-slate-900 text-white border-slate-800'
       }`}>
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           
-          {/* Brand */}
+          {/* Brand & Realtime Live Sync Status */}
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center font-black text-white text-sm shadow-xs">
               L
@@ -154,22 +200,23 @@ export default function App() {
                 <h1 className="text-sm sm:text-base font-bold tracking-tight">
                   Daily Lead Tracker
                 </h1>
-                {/* Cloud Sync Status Indicator */}
+                
+                {/* Live Cloud Sync indicator */}
                 {syncStatus === 'synced' && (
                   <span
-                    title="All records safely stored and synchronized with Firestore cloud database"
-                    className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                    title="Live cloud sync active. Anyone editing will see real-time updates."
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
                   >
-                    <Cloud className="w-3 h-3 text-emerald-400" />
-                    <span>Cloud Safe</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>Live Synced</span>
                   </span>
                 )}
                 {syncStatus === 'syncing' && (
                   <span
-                    title="Syncing changes with cloud..."
-                    className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                    title="Syncing latest changes..."
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30"
                   >
-                    <Cloud className="w-3 h-3 text-amber-400 animate-pulse" />
+                    <Cloud className="w-3 h-3 animate-pulse" />
                     <span>Syncing...</span>
                   </span>
                 )}
@@ -189,7 +236,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Center & Right Controls */}
+          {/* Controls: View Switcher & Theme */}
           <div className="flex items-center gap-3">
             
             {/* 2 Clean View Switcher Buttons */}
@@ -255,7 +302,7 @@ export default function App() {
         {activeView === 'entry' ? (
           <DailyEntryPage
             currentDate={selectedDate}
-            onDateChange={setSelectedDate}
+            onDateChange={handleDateChange}
             record={currentRecord}
             onSave={handleSaveRecord}
             onGoToTracker={() => setActiveView('tracker')}

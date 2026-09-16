@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { DayRecord, LeadQuality, ProofItem } from '../types';
 import { renderWithClickableLinks } from '../utils/linkify';
+import { getLocalTodayISO } from '../utils/storage';
 
 interface ReportsTrackerPageProps {
   records: DayRecord[];
@@ -47,16 +48,20 @@ export const ReportsTrackerPage: React.FC<ReportsTrackerPageProps> = ({
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
   // Calculate start/end date based on preset
-  const today = new Date();
   const getDaysAgoISO = (days: number) => {
-    const d = new Date(today);
-    d.setDate(d.getDate() - days);
-    return d.toISOString().split('T')[0];
+    const today = getLocalTodayISO();
+    const [y, m, d] = today.split('-').map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    dateObj.setDate(dateObj.getDate() - days);
+    const ny = dateObj.getFullYear();
+    const nm = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const nd = String(dateObj.getDate()).padStart(2, '0');
+    return `${ny}-${nm}-${nd}`;
   };
 
   // Filtered records by date range
   const dateRangeFilteredRecords = useMemo(() => {
-    const todayISO = today.toISOString().split('T')[0];
+    const todayISO = getLocalTodayISO();
 
     return records.filter((r) => {
       if (datePreset === '7d') {
@@ -69,7 +74,8 @@ export const ReportsTrackerPage: React.FC<ReportsTrackerPageProps> = ({
         return r.date >= getDaysAgoISO(29) && r.date <= todayISO;
       }
       if (datePreset === 'month') {
-        const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
+        const [y, m] = todayISO.split('-');
+        const firstOfMonth = `${y}-${m}-01`;
         return r.date >= firstOfMonth && r.date <= todayISO;
       }
       if (datePreset === 'custom') {

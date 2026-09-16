@@ -13,12 +13,31 @@ import {
 const STORAGE_KEY = 'simple_leads_tracker_records_v3';
 const COLLECTION_NAME = 'day_records';
 
+export const getLocalTodayISO = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const hasLocalCache = (): boolean => {
+  try {
+    return !!localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return false;
+  }
+};
+
 export function getInitialRecords(): DayRecord[] {
   const today = new Date();
   const formatDate = (daysAgo: number): string => {
     const d = new Date(today);
     d.setDate(d.getDate() - daysAgo);
-    return d.toISOString().split('T')[0];
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
   return [

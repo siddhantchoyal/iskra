@@ -12,6 +12,11 @@ export interface ProofItem {
   createdAt?: string;
 }
 
+export interface TeamSettings {
+  timezone: string; // IANA timezone, e.g. 'Asia/Kolkata', 'America/New_York', or 'auto'
+  updatedAt?: string;
+}
+
 export interface DayRecord {
   date: string; // YYYY-MM-DD
   

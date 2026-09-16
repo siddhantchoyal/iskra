@@ -47,5 +47,11 @@ service cloud.firestore {
       allow update: if isValidDateId(date) && incoming().date == date && isValidDayRecord(incoming());
       allow delete: if isValidDateId(date);
     }
+
+    // 4. Team settings & timezone configuration
+    match /team_settings/{settingId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

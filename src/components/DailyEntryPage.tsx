@@ -16,6 +16,7 @@ import {
 import { DayRecord, LeadQuality, ProofItem } from '../types';
 import { renderWithClickableLinks } from '../utils/linkify';
 import { ProofModal } from './ProofModal';
+import { getLocalTodayISO } from '../utils/storage';
 
 interface DailyEntryPageProps {
   currentDate: string;
@@ -34,8 +35,6 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
   onGoToTracker,
   isDark,
 }) => {
-  const getTodayISO = () => new Date().toISOString().split('T')[0];
-
   const [leadsReceived, setLeadsReceived] = useState<number>(record.leadsReceived || 0);
   const [quality, setQuality] = useState<LeadQuality>(record.quality || 'Good');
   const [receivedNotes, setReceivedNotes] = useState<string>(record.receivedNotes || '');
@@ -50,14 +49,17 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
 
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
   const [lastSavedTime, setLastSavedTime] = useState<string>('');
-  const isSwitchingDateRef = useRef(true);
+
+  // Dirty flag: ONLY becomes true when the user actually edits something on the screen.
+  // This strictly prevents uninitialized forms or background prop updates from overwriting the cloud!
+  const isDirtyRef = useRef(false);
   const prevDateRef = useRef(currentDate);
 
   // Modal open states
   const [isSetterProofModalOpen, setIsSetterProofModalOpen] = useState(false);
   const [isCallerProofModalOpen, setIsCallerProofModalOpen] = useState(false);
 
-  // Keep a ref of all fields for instant flushing on unmount or navigation
+  // Keep a ref of all fields for instant flushing
   const latestDataRef = useRef({
     date: currentDate,
     leadsReceived,
@@ -85,6 +87,10 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
   };
 
   const flushSave = (overrideDate?: string) => {
+    // CRITICAL: Never flush or save if the user hasn't made actual edits!
+    if (!isDirtyRef.current) return;
+    isDirtyRef.current = false;
+
     const d = latestDataRef.current;
     const targetDate = overrideDate || d.date;
     const updated: DayRecord = {
@@ -101,48 +107,88 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
       updatedAt: new Date().toISOString(),
     };
     onSave(updated);
+    setSaveStatus('saved');
+    setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
   };
 
-  // Sync state when currentDate changes
+  // User edit handlers that mark the form as dirty
+  const handleLeadsReceivedChange = (val: number) => {
+    isDirtyRef.current = true;
+    setLeadsReceived(val);
+  };
+  const handleQualityChange = (val: LeadQuality) => {
+    isDirtyRef.current = true;
+    setQuality(val);
+  };
+  const handleReceivedNotesChange = (val: string) => {
+    isDirtyRef.current = true;
+    setReceivedNotes(val);
+  };
+  const handleQualifiedLeadsChange = (val: number) => {
+    isDirtyRef.current = true;
+    setQualifiedLeads(val);
+  };
+  const handleQualifiedNotesChange = (val: string) => {
+    isDirtyRef.current = true;
+    setQualifiedNotes(val);
+  };
+  const handleOnboardedLeadsChange = (val: number) => {
+    isDirtyRef.current = true;
+    setOnboardedLeads(val);
+  };
+  const handleOnboardedNotesChange = (val: string) => {
+    isDirtyRef.current = true;
+    setOnboardedNotes(val);
+  };
+
+  // Sync state whenever record or currentDate changes
   useEffect(() => {
-    // If we are navigating away from a previous date, ensure previous date's changes were saved
+    // If we are navigating away from a previous date, flush pending edits for that date first
     if (prevDateRef.current && prevDateRef.current !== currentDate) {
-      flushSave(prevDateRef.current);
+      if (isDirtyRef.current) {
+        flushSave(prevDateRef.current);
+      }
+      isDirtyRef.current = false;
+      prevDateRef.current = currentDate;
     }
-    prevDateRef.current = currentDate;
-    isSwitchingDateRef.current = true;
 
-    setLeadsReceived(record.leadsReceived || 0);
-    setQuality(record.quality || 'Good');
-    setReceivedNotes(record.receivedNotes || '');
+    // When a fresh or updated record arrives from Firestore or props,
+    // update form fields as long as user does not have active unsaved edits
+    if (!isDirtyRef.current) {
+      setLeadsReceived(record.leadsReceived || 0);
+      setQuality(record.quality || 'Good');
+      setReceivedNotes(record.receivedNotes || '');
 
-    setQualifiedLeads(record.qualifiedLeads || 0);
-    setQualifiedProofs(record.qualifiedProofs || []);
-    setQualifiedNotes(record.qualifiedNotes || '');
+      setQualifiedLeads(record.qualifiedLeads || 0);
+      setQualifiedProofs(record.qualifiedProofs || []);
+      setQualifiedNotes(record.qualifiedNotes || '');
 
-    setOnboardedLeads(record.onboardedLeads || 0);
-    setOnboardedProofs(record.onboardedProofs || []);
-    setOnboardedNotes(record.onboardedNotes || '');
+      setOnboardedLeads(record.onboardedLeads || 0);
+      setOnboardedProofs(record.onboardedProofs || []);
+      setOnboardedNotes(record.onboardedNotes || '');
 
-    setSaveStatus('saved');
-  }, [currentDate]);
+      setSaveStatus('saved');
+    }
+  }, [currentDate, record]);
 
   // Flush on unmount (e.g. if user navigates to Reports Tracker)
   useEffect(() => {
     return () => {
-      flushSave();
+      if (isDirtyRef.current) {
+        flushSave();
+      }
     };
   }, []);
 
-  // Auto-save whenever any input, note, or quality changes (Google Sheets / Notes style)
+  // Debounced auto-save: ONLY runs when isDirtyRef is true (user actually changed values)
   useEffect(() => {
-    if (isSwitchingDateRef.current) {
-      isSwitchingDateRef.current = false;
-      return;
-    }
+    if (!isDirtyRef.current) return;
 
     setSaveStatus('saving');
     const timer = setTimeout(() => {
+      if (!isDirtyRef.current) return;
+      isDirtyRef.current = false;
+
       const updated: DayRecord = {
         date: currentDate,
         leadsReceived: Number(leadsReceived) || 0,
@@ -159,7 +205,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
       onSave(updated);
       setSaveStatus('saved');
       setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    }, 250);
+    }, 350);
 
     return () => clearTimeout(timer);
   }, [
@@ -175,12 +221,18 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
     currentDate,
   ]);
 
-  // Quick next/prev day navigation
+  // Quick next/prev day navigation using local date math
   const shiftDate = (days: number) => {
-    flushSave();
-    const d = new Date(currentDate);
+    if (isDirtyRef.current) {
+      flushSave();
+    }
+    const [y, m, day] = currentDate.split('-').map(Number);
+    const d = new Date(y, m - 1, day);
     d.setDate(d.getDate() + days);
-    onDateChange(d.toISOString().split('T')[0]);
+    const ny = d.getFullYear();
+    const nm = String(d.getMonth() + 1).padStart(2, '0');
+    const nd = String(d.getDate()).padStart(2, '0');
+    onDateChange(`${ny}-${nm}-${nd}`);
   };
 
   // Funnel calculations in real-time
@@ -194,7 +246,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
     ? ((onboardedLeads / leadsReceived) * 100).toFixed(1) 
     : '0.0';
 
-  const isToday = currentDate === getTodayISO();
+  const isToday = currentDate === getLocalTodayISO();
 
   // Dark/Light styling helpers
   const cardBg = isDark ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900';
@@ -299,7 +351,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
           {/* TODAY BUTTON */}
           <button
             type="button"
-            onClick={() => onDateChange(getTodayISO())}
+            onClick={() => onDateChange(getLocalTodayISO())}
             title="Jump to Today"
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
               isToday
@@ -391,7 +443,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
                 type="number"
                 min="0"
                 value={leadsReceived}
-                onChange={(e) => setLeadsReceived(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => handleLeadsReceivedChange(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full px-3 py-2 rounded-lg text-lg font-bold focus:ring-2 focus:ring-blue-500 ${inputBg}`}
                 required
               />
@@ -422,7 +474,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
                     <button
                       key={q}
                       type="button"
-                      onClick={() => setQuality(q)}
+                      onClick={() => handleQualityChange(q)}
                       className={`py-2 text-xs font-bold rounded-lg border transition ${currentThemeMap[q]}`}
                     >
                       {q}
@@ -444,7 +496,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
             <textarea
               rows={2}
               value={receivedNotes}
-              onChange={(e) => setReceivedNotes(e.target.value)}
+              onChange={(e) => handleReceivedNotesChange(e.target.value)}
               placeholder="What caused lead quality today? e.g. campaign switch, budget changes, link to adset https://..."
               className={`w-full px-3 py-2 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 ${inputBg}`}
             />
@@ -483,7 +535,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
                 type="number"
                 min="0"
                 value={qualifiedLeads}
-                onChange={(e) => setQualifiedLeads(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => handleQualifiedLeadsChange(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full px-3 py-2 rounded-lg text-lg font-bold text-indigo-400 focus:ring-2 focus:ring-indigo-500 ${inputBg}`}
                 required
               />
@@ -517,7 +569,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
             <textarea
               rows={2}
               value={qualifiedNotes}
-              onChange={(e) => setQualifiedNotes(e.target.value)}
+              onChange={(e) => handleQualifiedNotesChange(e.target.value)}
               placeholder="Setter objections, qualification criteria, follow-up timeline, CRM link https://..."
               className={`w-full px-3 py-2 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 ${inputBg}`}
             />
@@ -556,7 +608,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
                 type="number"
                 min="0"
                 value={onboardedLeads}
-                onChange={(e) => setOnboardedLeads(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => handleOnboardedLeadsChange(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full px-3 py-2 rounded-lg text-lg font-bold text-emerald-400 focus:ring-2 focus:ring-emerald-500 ${inputBg}`}
                 required
               />
@@ -590,7 +642,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
             <textarea
               rows={2}
               value={onboardedNotes}
-              onChange={(e) => setOnboardedNotes(e.target.value)}
+              onChange={(e) => handleOnboardedNotesChange(e.target.value)}
               placeholder="What drove calls today? e.g. price objections, signed agreements, Stripe link https://..."
               className={`w-full px-3 py-2 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 ${inputBg}`}
             />
@@ -642,6 +694,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
         proofs={qualifiedProofs}
         onSaveProofs={(updatedProofs) => {
           setQualifiedProofs(updatedProofs);
+          isDirtyRef.current = false;
           // Auto-save immediately to storage
           const d = latestDataRef.current;
           onSave({
@@ -672,6 +725,7 @@ export const DailyEntryPage: React.FC<DailyEntryPageProps> = ({
         proofs={onboardedProofs}
         onSaveProofs={(updatedProofs) => {
           setOnboardedProofs(updatedProofs);
+          isDirtyRef.current = false;
           // Auto-save immediately to storage
           const d = latestDataRef.current;
           onSave({
