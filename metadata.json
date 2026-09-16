@@ -1,0 +1,6 @@
+{
+  "name": "Daily Lead & Pipeline Tracker",
+  "description": "Daily lead conversion and pipeline performance tracker for setters, callers, and controllers with proof screenshots, quality ratings, and reports.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
